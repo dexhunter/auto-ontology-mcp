@@ -10,6 +10,7 @@ lexical index misses by searching again with synonyms or translations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 from .naming import QUESTION_WORDS, normalize_text, tokens, trigram_similarity
@@ -30,14 +31,25 @@ def _token_match(q: str, f_set: set[str]) -> float:
     """How well one query token matches a field: 1.0 exact, else the best fuzzy match."""
     if q in f_set:
         return 1.0
+    similarity = getattr(_token_match, "_similarity_cache", None)
+    if similarity is None:
+        similarity = lru_cache(maxsize=8192)(trigram_similarity)
+        _token_match._similarity_cache = similarity
+    q_len = len(q)
+    check_containment = q_len >= 2 and not q.isascii()
+    min_len, max_len = q_len - 3, q_len + 3
     best = 0.0
     for f in f_set:
-        if len(q) >= 2 and len(f) >= 2 and not q.isascii() and (f in q or q in f):
-            best = max(best, 0.8)
-        elif abs(len(f) - len(q)) <= 3:
-            sim = trigram_similarity(q, f)
+        f_len = len(f)
+        if check_containment and f_len >= 2 and (f in q or q in f):
+            if best < 0.8:
+                best = 0.8
+        elif min_len <= f_len <= max_len:
+            sim = similarity(q, f) if type(q) is str and type(f) is str else trigram_similarity(q, f)
             if sim >= 0.45:
-                best = max(best, sim * 0.8)
+                match = sim * 0.8
+                if match > best:
+                    best = match
     return best
 
 
